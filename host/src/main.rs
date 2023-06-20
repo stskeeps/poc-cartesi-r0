@@ -32,8 +32,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // First, we construct an executor environment
     let env = ExecutorEnv::builder()
         .io_callback(SYS_PAGE_IN, move |buf: &[u8]| -> Vec<u8> { // use move keyword to capture the environment
-            let paddr = u64::from_le_bytes(buf.try_into().expect("incorrect length"));
-            println!("got asked to page in {}", paddr);          
+            let paddr = u64::from_le_bytes(buf[0..8].try_into().expect("incorrect length"));
+            let length = u64::from_le_bytes(buf[8..16].try_into().expect("incorrect length"));
+            println!("got asked to page in 0x{:x} length 0x{:x}", paddr, length);          
             let (tx, rx) = mpsc::channel();
 
             let grpc_machine_clone = Arc::clone(&grpc_machine);
@@ -43,7 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         
                 let data = rt.block_on(async {
                     let mut grpc_machine = grpc_machine_clone.lock().unwrap();
-                    grpc_machine.read_memory(paddr, 4096).await.unwrap()
+                    grpc_machine.read_memory(paddr, length).await.unwrap()
                 }); // Use the runtime to run the async function
                 tx.send(data).unwrap();
             });
