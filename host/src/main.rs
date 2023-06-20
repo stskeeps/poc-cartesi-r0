@@ -8,12 +8,13 @@ use std::sync::mpsc;
 // `METHOD_NAME_ID` with `MULTIPLY_ID`
 use methods::{METHOD_NAME_ELF, METHOD_NAME_ID};
 use risc0_zkvm::{
-    serde::{from_slice, to_vec},
     Executor, ExecutorEnv,
 };
+
+use risc0_zkvm::serde::from_slice;
 use futures::FutureExt; // for `.boxed()`
 
-use project_core::{SYS_PAGE_IN};
+use project_core::{SYS_PAGE_IN, PageResult};
 
 extern crate grpc_cartesi_machine;
 
@@ -72,9 +73,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("session segments {:?}", session.segments.len());
     println!("proving ..");
     // Prove the session to produce a receipt.
-    let receipt = session.prove().unwrap();
-
-    println!("made receipt");
+    let receipt = session.prove()?;
+    
+    let pageIns: Vec<PageResult> = from_slice(&receipt.journal)?;
+    
+    println!("made receipt: {:?}", pageIns);
     // TODO: Implement code for transmitting or serializing the receipt for
     // other parties to verify here
 
