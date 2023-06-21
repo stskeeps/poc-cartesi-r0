@@ -14,7 +14,6 @@ pub struct PageIn<'a> {
     pub paddr: u64,
     pub length: u64,
     pub initial_hash: &'a [u8],
-    pub after_hash: &'a [u8],
     pub dirty: bool
 }
 
@@ -25,4 +24,18 @@ pub struct PageResult {
     pub initial_hash: Vec<u8>,
     pub after_hash: Vec<u8>,
     pub dirty: bool
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct CartesiInput {
+    pub begin_mcycle: u64,
+    pub end_mcycle: u64
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct CartesiResult {
+    pub begin_mcycle: u64,
+    pub end_mcycle: u64,
+    pub page_results: Vec<PageResult>,
+    pub tty: Vec<u8>,
 }
