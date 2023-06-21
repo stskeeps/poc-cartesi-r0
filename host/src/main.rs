@@ -32,16 +32,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let grpc_machine = Arc::new(Mutex::new(GrpcCartesiMachineClient::new(args[1].clone()).await?));
     grpc_machine.lock().unwrap().load_machine("/images/test3", &MachineRuntimeConfig { concurrency: ConcurrencyConfig { update_merkle_tree: 1 }}).await?;
     let grpc_machine_op = Arc::clone(&grpc_machine);
-
+    let mut total_segments = 0;
     for i in 0..10000 { 
-        let begin_mcycle = i * 2000;
-        let end_mcycle = (i + 1) * 2000; 
+        let begin_mcycle = i * 50000;
+        let end_mcycle = (i + 1) * 50000; 
         let input = CartesiInput {
             begin_mcycle: begin_mcycle,
             end_mcycle: end_mcycle
         };
         let grpc_machine_clone = Arc::clone(&grpc_machine_op); // Clone here instead
-        if begin_mcycle % 10000 == 0 {
+        if begin_mcycle % 100000 == 0 {
             println!(". {}", begin_mcycle);
         }
         // First, we construct an executor environment
@@ -85,8 +85,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
         // Run the executor to produce a session.
         let session = exec.run().unwrap();
-    
-        //println!("session segments {:?}", session.segments.len());
+        total_segments = total_segments + session.segments.len();
+        println!("session segments {:?} {:?}", session.segments.len(), total_segments);
     //    println!("proving ..");
         // Prove the session to produce a receipt.
     //    let receipt = session.prove()?;
