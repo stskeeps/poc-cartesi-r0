@@ -78,7 +78,6 @@ pub extern "C" fn page_in_with_length(paddr: u64, length: u64) -> u32 {
 
 #[no_mangle]
 pub extern "C" fn _putchar(x: u8) {
- print!("{}", x as char);
  unsafe { 
   ttyOut.push(x);
  }

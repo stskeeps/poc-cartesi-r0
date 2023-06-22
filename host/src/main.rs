@@ -33,9 +33,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     grpc_machine.lock().unwrap().load_machine("/images/test3", &MachineRuntimeConfig { concurrency: ConcurrencyConfig { update_merkle_tree: 1 }}).await?;
     let grpc_machine_op = Arc::clone(&grpc_machine);
     let mut total_segments = 0;
+    let start_at = 7000000;
+    let step = 50000;
+    grpc_machine_op.lock().unwrap().run(start_at).await?;
+
     for i in 0..10000 { 
-        let begin_mcycle = i * 50000;
-        let end_mcycle = (i + 1) * 50000; 
+        let begin_mcycle = start_at + (i * step);
+        let end_mcycle = start_at + ((i + 1) * step); 
         let input = CartesiInput {
             begin_mcycle: begin_mcycle,
             end_mcycle: end_mcycle
@@ -95,26 +99,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if end_mcycle != result.end_mcycle {
             panic!("end_mcycle != result.end_mcycle");
         }
-        for x in result.tty.iter() {
-            print!("{}", *x as char);
-        }
+
         if result.tty.len() > 0 {
-            println!("");
+            println!("tty: {}", String::from_utf8(result.tty).unwrap());
         }
         grpc_machine_op.lock().unwrap().run(result.end_mcycle).await?;
-        /*
+        
         for page in result.page_results.iter() {
             if !page.dirty {
                 continue;
             }
+            //println!("checking dirty page {:x}", page.paddr);
             let mem = grpc_machine_op.lock().unwrap().read_memory(page.paddr, page.length).await.unwrap();
+            let mem_clone = mem.clone();
             let mut hasher = Sha256::new();
             hasher.update(mem);
             let hash = hasher.finalize();
             if page.dirty && hash.to_vec().cmp(&page.after_hash.to_vec()) != Ordering::Equal {
                 panic!("address 0x{:x} does not match SHA256 guest: {:?} host: {:?}", page.paddr, hash, page.after_hash);
             }
-        } */
+        }
     }
 
     //println!("got result: {:?}", result);
