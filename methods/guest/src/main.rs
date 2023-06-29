@@ -10,6 +10,8 @@ use project_core::{SYS_PAGE_IN, PageIn, PageResult, CartesiInput, CartesiResult}
 
 static mut pageIns: Vec<PageIn> = Vec::new();
 static mut ttyOut: Vec<u8> = Vec::new();
+static mut timeSpentHashing: usize = 0;
+static mut timeSpentSendRecv: usize = 0;
 
 extern {
     fn run_uarch(mcycle_begin: u64, mcycle_end: u64) -> u64;
@@ -26,6 +28,17 @@ pub extern "C" fn printout(c_string: *const c_char) {
 #[no_mangle]
 pub extern "C" fn page_in(paddr: u64) -> u32 {
   page_in_with_length(paddr, 4096)
+}
+
+#[no_mangle]
+pub extern "C" fn print_counter(c_string: *const c_char, cycle: u32) {
+  let s = unsafe { CStr::from_ptr(c_string).to_string_lossy().into_owned() };
+  println!("<{:?}> count: {}", s, cycle);
+}
+
+#[no_mangle]
+pub extern "C" fn ucycle() -> u32 {
+  env::get_cycle_count() as u32
 }
 
 #[no_mangle]
@@ -56,8 +69,10 @@ pub extern "C" fn page_in_with_length(paddr: u64, length: u64) -> u32 {
       v.extend_from_slice(&length.to_le_bytes());
       let mem = env::send_recv_slice::<u8, u8>(SYS_PAGE_IN, v.as_slice());   
       //println!("paged in paddr 0x{:x} as 0x{:x} length 0x{:x}", paddr, mem.as_ptr() as usize, length);
-
-      let initial_hash = Impl::hash_bytes(mem).as_bytes();
+      let before_hash = env::get_cycle_count();
+      let digest = Box::new(Impl::hash_bytes(mem));
+      let initial_hash = Box::leak(digest).as_bytes();
+      let after_hash = env::get_cycle_count();
       let s = PageIn {
         page: mem,
         paddr: paddr,
@@ -92,9 +107,14 @@ pub extern "C" fn abort() {
 pub fn main() {
    unsafe {
     let input: CartesiInput = env::read();
+    //let before = env::get_cycle_count();
     let mcycle = run_uarch(input.begin_mcycle, input.end_mcycle);
+    //let after = env::get_cycle_count();
+
+    //println!("cycles spent in uarch: {}", after-before);
 
     let mut commitment: Vec<PageResult> = Vec::new();
+    //let before_dirty = env::get_cycle_count();
     for n in pageIns.iter() {
       if n.dirty {
         commitment.push(PageResult {
@@ -122,5 +142,9 @@ pub fn main() {
     };
 
     env::commit(&result);
+    // let after_dirty = env::get_cycle_count();
+    /* unsafe {
+      println!("total cycles spent hashing: {} sendrecv: {} dirty-hashing-commit: {}", timeSpentHashing, timeSpentSendRecv, after_dirty - before_dirty);
+    } */
    }
 }

@@ -6,9 +6,10 @@ edition = "2021"
 [dependencies]
 methods = { path = "../methods" }
 grpc-cartesi-machine = { path = "../../machine-manager/grpc-cartesi-machine" }
+cartesi-grpc-interfaces = { path = "../../machine-manager/cartesi-grpc-interfaces" }
 tokio = { version = "~1.12.0", features = ["macros", "rt-multi-thread","time"]}
 project-core = { path = "../core" }
-risc0-zkvm = { version = "0.15.2" }
+risc0-zkvm = { path = "../../risc0/risc0/zkvm" }
 serde = "1.0"
 log = "0.4"
 env_logger = "0.10"

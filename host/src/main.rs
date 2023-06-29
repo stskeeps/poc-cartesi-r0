@@ -1,144 +1,192 @@
-use std::sync::{Arc, Mutex};
-use std::thread;
-use tokio::runtime::Runtime;
-use std::sync::mpsc;
+use bincode;
+use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::fs::File;
 use std::io::Write;
-use bincode;
-use serde::{Serialize, Deserialize};
-
+use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::{Duration, Instant};
+use tokio::runtime::Runtime;
 
 // TODO: Update the name of the method loaded by the prover. E.g., if the method
 // is `multiply`, replace `METHOD_NAME_ELF` with `MULTIPLY_ELF` and replace
 // `METHOD_NAME_ID` with `MULTIPLY_ID`
 use methods::{METHOD_NAME_ELF, METHOD_NAME_ID};
-use risc0_zkvm::{
-    Executor, ExecutorEnv,
-};
+use risc0_zkvm::{Executor, ExecutorEnv, Session};
 
+use project_core::{CartesiInput, CartesiResult, SYS_PAGE_IN};
 use risc0_zkvm::serde::from_slice;
 use risc0_zkvm::serde::to_vec;
-use futures::FutureExt; // for `.boxed()`
-use sha2::{Sha256, Digest};
-use project_core::{SYS_PAGE_IN, CartesiInput, CartesiResult};
+use sha2::{Digest, Sha256};
 
+extern crate cartesi_grpc_interfaces;
 extern crate grpc_cartesi_machine;
+use cartesi_grpc_interfaces::grpc_stubs::cartesi_machine::Csr;
 
-use grpc_cartesi_machine::{GrpcCartesiMachineClient, MachineRuntimeConfig, ConcurrencyConfig};
+use grpc_cartesi_machine::{ConcurrencyConfig, GrpcCartesiMachineClient, MachineRuntimeConfig};
+struct SessionOfCycle {
+    session: Session,
+    from_mcycle: u64,
+    to_mcycle: u64,
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
 
-    env_logger::init();
-    
-    // Initialize the grpc_machine outside the callback
-    let grpc_machine = Arc::new(Mutex::new(GrpcCartesiMachineClient::new(args[1].clone()).await?));
-    grpc_machine.lock().unwrap().load_machine("/images/test3", &MachineRuntimeConfig { concurrency: ConcurrencyConfig { update_merkle_tree: 1 }}).await?;
-    let grpc_machine_op = Arc::clone(&grpc_machine);
-    let mut total_segments = 0;
-    let start_at = 7200000;
-    let step = 10000;
-    println!("starting at mcycle {}", start_at);
-    grpc_machine_op.lock().unwrap().run(start_at).await?;
+    let grpc_machine = Arc::new(Mutex::new(
+        GrpcCartesiMachineClient::new(args[1].clone()).await?,
+    ));
 
-    for i in 0..10000 { 
-        let begin_mcycle = start_at + (i * step);
-        let end_mcycle = start_at + ((i + 1) * step); 
-        let filename = format!("sessions/session_{}_{}.bin", begin_mcycle, end_mcycle);
+    let grpc_machine_producer = Arc::clone(&grpc_machine);
+    let min_cycle: u64 = args[2].parse()?;
+    let max_cycle: u64 = args[3].parse()?;
+    let step: u64 = args[4].parse()?;
+    let bound: usize = args[5].parse()?;
+    let (tx, rx) = mpsc::sync_channel(bound);
 
-        let input = CartesiInput {
-            begin_mcycle: begin_mcycle,
-            end_mcycle: end_mcycle
-        };
-        let grpc_machine_clone = Arc::clone(&grpc_machine_op); // Clone here instead
-        if begin_mcycle % 100000 == 0 {
-            println!(". mcycle {} total segments this session {}", begin_mcycle, total_segments);
-        }
-        // First, we construct an executor environment
+    let handle = thread::spawn(move || {
+        let rt = Runtime::new().unwrap(); // Create a new runtime
 
-        let env = ExecutorEnv::builder()
-            .add_input(&to_vec(&input)?)
-            .io_callback(SYS_PAGE_IN, move |buf: &[u8]| -> Vec<u8> { // use move keyword to capture the environment
-                let paddr = u64::from_le_bytes(buf[0..8].try_into().expect("incorrect length"));
-                let length = u64::from_le_bytes(buf[8..16].try_into().expect("incorrect length"));
-                // println!("{} got asked to page in 0x{:x} length 0x{:x}", begin_mcycle, paddr, length);          
-                let (tx, rx) = mpsc::channel();
-    
-                let grpc_machine_inner_clone = Arc::clone(&grpc_machine_clone);
-                let handle = thread::spawn(move || {
-                    let rt = Runtime::new().unwrap(); // Create a new runtime
-            
-                    let data = rt.block_on(async {
-                        let mut grpc_machine = grpc_machine_inner_clone.lock().unwrap();
-                        grpc_machine.read_memory(paddr, length).await.unwrap()
-                    }); // Use the runtime to run the async function
-                    tx.send(data).unwrap();
-                });
-            
-                handle.join().expect("Thread panicked");
-            
-                let mem = rx.recv().expect("Failed to receive data");
-                mem
-            })
-            .build();
-    
-        // TODO: add guest input to the executor environment using
-        // ExecutorEnvBuilder::add_input().
-        // To access this method, you'll need to use the alternate construction
-        // ExecutorEnv::builder(), which creates an ExecutorEnvBuilder. When you're
-        // done adding input, call ExecutorEnvBuilder::build().
-    
-        // For example: let env = ExecutorEnv::builder().add_input(&vec).build();
-    
-        // Next, we make an executor, loading the (renamed) ELF binary.
-        let mut exec = Executor::from_elf(env, METHOD_NAME_ELF).unwrap();
-    
-        // Run the executor to produce a session.
-        let session = exec.run().unwrap();
-        total_segments = total_segments + session.segments.len();
-    //    println!("proving ..");
-        // Prove the session to produce a receipt.
-    //    let receipt = session.prove()?;
-        
+        let data = rt.block_on(async {
+            grpc_machine
+                .lock()
+                .unwrap()
+                .load_machine(
+                    "/images/test3",
+                    &MachineRuntimeConfig {
+                        concurrency: ConcurrencyConfig {
+                            update_merkle_tree: 1,
+                        },
+                    },
+                )
+                .await
+                .unwrap();
 
-        let result: CartesiResult = from_slice(&session.journal)?;
-        if end_mcycle != result.end_mcycle {
-            panic!("end_mcycle != result.end_mcycle");
-        }
+            grpc_machine_producer
+                .lock()
+                .unwrap()
+                .run(min_cycle)
+                .await
+                .unwrap();
 
-        if result.tty.len() > 0 {
-            println!("tty: {}", String::from_utf8(result.tty).unwrap());
-        }
-        grpc_machine_op.lock().unwrap().run(result.end_mcycle).await?;
-        let encoded: Vec<u8> = bincode::serialize(&session).unwrap();
+            let mut current_mcycle: u64 = grpc_machine_producer
+                .lock()
+                .unwrap()
+                .read_csr(Csr::Mcycle)
+                .await
+                .unwrap();
+
+            if current_mcycle != min_cycle {
+                panic!("should start at {} but was {}", min_cycle, current_mcycle);
+            }
+            while current_mcycle < max_cycle {
+                let end_mcycle = if current_mcycle + step > max_cycle {
+                    max_cycle
+                } else {
+                    current_mcycle + step
+                };
+
+                let input = CartesiInput {
+                    begin_mcycle: current_mcycle,
+                    end_mcycle: end_mcycle,
+                };
+
+                let grpc_machine_clone = Arc::clone(&grpc_machine_producer); // Clone here instead
+
+                let env = ExecutorEnv::builder()
+                    .add_input(&to_vec(&input).unwrap())
+                    .io_callback(SYS_PAGE_IN, move |buf: &[u8]| -> Vec<u8> {
+                        // use move keyword to capture the environment
+                        let paddr =
+                            u64::from_le_bytes(buf[0..8].try_into().expect("incorrect length"));
+                        let length =
+                            u64::from_le_bytes(buf[8..16].try_into().expect("incorrect length"));
+                        // println!("{} got asked to page in 0x{:x} length 0x{:x}", begin_mcycle, paddr, length);
+                        let (tx, rx) = mpsc::channel();
+
+                        let grpc_machine_inner_clone = Arc::clone(&grpc_machine_clone);
+                        let handle = thread::spawn(move || {
+                            let rt = Runtime::new().unwrap(); // Create a new runtime
+
+                            let data = rt.block_on(async {
+                                let mut grpc_machine = grpc_machine_inner_clone.lock().unwrap();
+                                grpc_machine.read_memory(paddr, length).await.unwrap()
+                            }); // Use the runtime to run the async function
+                            tx.send(data).unwrap();
+                        });
+
+                        handle.join().expect("Thread panicked");
+
+                        let mem = rx.recv().expect("Failed to receive data");
+                        mem
+                    })
+                    .build()
+                    .unwrap();
+                let mut exec = Executor::from_elf(env, METHOD_NAME_ELF).unwrap();
+                println!("executing mcycle {} to {}", current_mcycle, end_mcycle);
+
+                let start = Instant::now();
+                let session = exec.run().unwrap();
+                let duration = start.elapsed();
+                println!("done executing, elapsed {:?}", duration);
+                let result: CartesiResult = from_slice(&session.journal).unwrap();
+                let real_end_mcycle = if result.end_mcycle != end_mcycle {
+                    result.end_mcycle
+                } else {
+                    end_mcycle
+                };
+
+                if result.tty.len() > 0 {
+                    println!("tty: {}", String::from_utf8(result.tty).unwrap());
+                }
+
+                let ses = SessionOfCycle {
+                    session: session,
+                    from_mcycle: current_mcycle,
+                    to_mcycle: real_end_mcycle,
+                };
+                tx.send(ses).unwrap();
+
+                grpc_machine_producer
+                    .lock()
+                    .unwrap()
+                    .run(real_end_mcycle)
+                    .await
+                    .unwrap();
+
+                current_mcycle = grpc_machine_producer
+                    .lock()
+                    .unwrap()
+                    .read_csr(Csr::Mcycle)
+                    .await
+                    .unwrap();
+            }
+        });
+    });
+
+    for received in rx {
+        println!(
+            "Proving session {}-{} {}",
+            received.from_mcycle, received.to_mcycle,
+            received.session.segments.len()
+        );
+        let start = Instant::now();
+        let receipt = received.session.prove().unwrap();
+        let duration = start.elapsed();
+        println!("done proving, elapsed {:?}", duration);
+
+        println!("Writing out proof");
+        let filename = format!(
+            "proofs/proofs_{}_{}.bin",
+            received.from_mcycle, received.to_mcycle
+        );
+        let encoded: Vec<u8> = receipt.encode();
         let mut file = File::create(&filename).unwrap();
         file.write_all(&encoded).unwrap();
-        
-        /*
-        for page in result.page_results.iter() {
-            if !page.dirty {
-                continue;
-            }
-            //println!("checking dirty page {:x}", page.paddr);
-            let mem = grpc_machine_op.lock().unwrap().read_memory(page.paddr, page.length).await.unwrap();
-            let mem_clone = mem.clone();
-            let mut hasher = Sha256::new();
-            hasher.update(mem);
-            let hash = hasher.finalize();
-            if page.dirty && hash.to_vec().cmp(&page.after_hash.to_vec()) != Ordering::Equal {
-                panic!("address 0x{:x} does not match SHA256 guest: {:?} host: {:?}", page.paddr, hash, page.after_hash);
-            }
-        } */
+        println!("done writing proof, size was {}", encoded.len());
     }
 
-    //println!("got result: {:?}", result);
-    // TODO: Implement code for transmitting or serializing the receipt for
-    // other parties to verify here
-
-    // Optional: Verify receipt to confirm that recipients will also be able to
-    // verify your receipt
-  //  receipt.verify(METHOD_NAME_ID).unwrap();
     Ok(())
 }
