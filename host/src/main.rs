@@ -13,7 +13,9 @@ use tokio::runtime::Runtime;
 // is `multiply`, replace `METHOD_NAME_ELF` with `MULTIPLY_ELF` and replace
 // `METHOD_NAME_ID` with `MULTIPLY_ID`
 use methods::{METHOD_NAME_ELF, METHOD_NAME_ID};
-use risc0_zkvm::{Executor, ExecutorEnv, Session};
+use risc0_zkvm::{ExecutorEnv, Session};
+use risc0_zkvm::default_executor_from_elf;
+
 
 use project_core::{CartesiInput, CartesiResult, SYS_PAGE_IN};
 use risc0_zkvm::serde::from_slice;
@@ -124,7 +126,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     })
                     .build()
                     .unwrap();
-                let mut exec = Executor::from_elf(env, METHOD_NAME_ELF).unwrap();
+                let mut exec = default_executor_from_elf(env, METHOD_NAME_ELF).unwrap();
                 println!("executing mcycle {} to {}", current_mcycle, end_mcycle);
 
                 let start = Instant::now();
@@ -182,7 +184,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "proofs/proofs_{}_{}.bin",
             received.from_mcycle, received.to_mcycle
         );
-        let encoded: Vec<u8> = receipt.encode();
+        let encoded: Vec<u8> = bincode::serialize(&receipt).unwrap();;
         let mut file = File::create(&filename).unwrap();
         file.write_all(&encoded).unwrap();
         println!("done writing proof, size was {}", encoded.len());
